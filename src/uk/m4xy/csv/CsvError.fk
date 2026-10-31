@@ -1,0 +1,2 @@
+// What's wrong with CSV, and on which line it starts, from 1.
+type CsvError(line: Int, message: String)

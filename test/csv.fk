@@ -1,0 +1,65 @@
+import uk.m4xy.fktests.api.Test
+import uk.m4xy.csv.*
+
+@Test rowsAreRead() = {
+  assertEquals(Ok([["a", "b", "c"], ["1", "2", "3"]]), Csv.parse("a,b,c\n1,2,3\n"))
+  assertEquals(Ok([["a", "b"], ["1", "2"]]), Csv.parse("a,b\r\n1,2"))
+  assertEquals(Ok([["", "x", ""]]), Csv.parse(",x,"))
+  assertEquals(Ok([]), Csv.parse(""))
+}
+
+// A quoted field has what it's written with: separators, doubled quotes, and line breaks.
+@Test quotedFieldsAreAsWritten() = {
+  assertEquals(
+    Ok([["name", "said"], ["Ada", "\"hello\", she said\nthen left"], ["Bo", ""]]),
+    Csv.parse("name,said\nAda,\"\"\"hello\"\", she said\nthen left\"\nBo,\"\""),
+  )
+  assertEquals(Ok([["a", "b,c"]]), Csv.parse("a,\"b,c\""))
+}
+
+@Test whatsWrongIsSaidWithItsLine() = {
+  assertEquals(Error(CsvError(2, "a quoted field isn't closed")), Csv.parse("a\n\"open,b\n"))
+  assertEquals(
+    Error(CsvError(3, "something follows a field's closing quote")),
+    Csv.parse("a\n\"two\nlines\"x"),
+  )
+}
+
+// What's written reads back as it was.
+@Test rowsAreWritten() = {
+  rows = [
+    ["id", "note"],
+    ["1", "plain"],
+    ["2", "with, comma"],
+    ["3", "say \"hi\""],
+    ["4", "two\nlines"],
+  ]
+  written = Csv.write(rows)
+  assertEquals(
+    "id,note\n1,plain\n2,\"with, comma\"\n3,\"say \"\"hi\"\"\"\n4,\"two\nlines\"\n",
+    written,
+  )
+  assertEquals(Ok(rows), Csv.parse(written))
+  assertEquals("a;b\r\n", Csv.write([["a", "b"]], ';', "\r\n"))
+}
+
+@Test recordsAreNamedByTheHeader() = {
+  records = Csv.records("name,age\nAda,36\nBo,7\n")
+  assertEquals(Ok([[("name", "Ada"), ("age", "36")], [("name", "Bo"), ("age", "7")]]), records)
+  assertEquals(
+    Some("7"),
+    records.toOption().flatMap { it.getOrNone(1) }.flatMap { Csv.field(it, "age") },
+  )
+  assertEquals(Error(CsvError(3, "row 3 has 1 fields, not 2")), Csv.records("a,b\n1,2\n3\n"))
+}
+
+@Test otherSeparators() = assertEquals(Ok([["a", "b;c"]]), Csv.parse("a;\"b;c\"", ';'))
+
+// A file of many rows is read as quickly as a few.
+@Test manyRowsAreRead() = {
+  text = (1..20000).map { "$it,name $it,\"note, with comma\",${it * 3}" }.joinToString("\n")
+  assertEquals(
+    Some(["20000", "name 20000", "note, with comma", "60000"]),
+    Csv.parse(text).toOption().flatMap { it.lastOrNone() },
+  )
+}

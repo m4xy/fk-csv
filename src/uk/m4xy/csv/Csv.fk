@@ -1,0 +1,98 @@
+// CSV, as RFC 4180 has it: rows of fields, a separator between each, a line each. A field with a
+// separator, a quote or a line break in it is in quotes, a quote in it doubled; read, it's as it
+// was written.
+module Csv {
+  // The rows text has, its last line ending or not; or what's wrong with it.
+  parse(text: String, separator: Char = ','): Result<List<List<String>>, CsvError> =
+    if (text.isEmpty()) Ok([]) else rows(text.toList(), separator, 1, [], [], [])
+
+  // The rows, a line each, each field in quotes if it needs them.
+  write(rows: List<List<String>>, separator: Char = ',', lineEnd: String = "\n"): String =
+    rows.map { row -> row.map { quotedIfNeeded(it, separator) }.joinToString(separator.toString()) + lineEnd }
+      .joinToString("")
+
+  // The rows after the first, each as its fields named by the first's; or what's wrong, as a row
+  // with more or fewer fields than the first.
+  records(text: String, separator: Char = ','): Result<List<List<(String, String)>>, CsvError> =
+    parse(text, separator).flatMap { rows ->
+      when (rows) {
+        [] -> Ok([])
+        [header, *rest] -> {
+          wrong = rest.map { it.size != header.size }.indexOf(true)
+          if (wrong >= 0) Error(
+            CsvError(
+              wrong + 2,
+              "row ${wrong + 2} has ${rest.getOrNone(wrong).map { it.size }.getOrElse(0)} fields, not ${header.size}",
+            ),
+          )
+          else Ok(rest.map { header.zip(it) })
+        }
+      }
+    }
+
+  // What's in a record, by its field's name.
+  field(record: List<(String, String)>, name: String): Option<String> =
+    record.find { n, _ -> n == name }.map { _, value -> value }
+
+  // The rows from cs, on line, the row being read and its field so far, and the rows read: each
+  // kept last first, as adding to a list's front is quick, and turned round once it's whole.
+  private rows(
+    cs: List<Char>,
+    separator: Char,
+    line: Int,
+    field: List<Char>,
+    row: List<String>,
+    done: List<List<String>>,
+  ): Result<List<List<String>>, CsvError> = when (cs) {
+    [] -> Ok(
+      (if (field.isEmpty() && row.isEmpty()) done else [ended(field, row)] + done).reversed(),
+    )
+    ['\r', '\n', *rest] -> rows(rest, separator, line + 1, [], [], [ended(field, row)] + done)
+    ['\n', *rest] -> rows(rest, separator, line + 1, [], [], [ended(field, row)] + done)
+    ['"', *rest] if field.isEmpty() -> when (quoted(rest, line, [])) {
+      Ok(found) -> {
+        (value, after, lines) = found
+        when (after) {
+          [] -> Ok(([([value] + row).reversed()] + done).reversed())
+          [c, *_] if c == separator || c == '\n' || c == '\r' ->
+            rows(after, separator, line + lines, value.toList().reversed(), row, done)
+          else -> Error(CsvError(line + lines, "something follows a field's closing quote"))
+        }
+      }
+      Error(e) -> Error(e)
+    }
+    [c, *rest] if c == separator -> rows(
+      rest,
+      separator,
+      line,
+      [],
+      [text(field.reversed())] + row,
+      done,
+    )
+    [c, *rest] -> rows(rest, separator, line, [c] + field, row, done)
+  }
+
+  // The row, with its last field, the right way round.
+  private ended(field: List<Char>, row: List<String>): List<String> =
+    ([text(field.reversed())] + row).reversed()
+
+  // A quoted field's text, from after its quote, its doubled quotes one; what's after its closing
+  // quote; and how many line breaks were in it.
+  private quoted(
+    cs: List<Char>,
+    line: Int,
+    found: List<Char>,
+  ): Result<(String, List<Char>, Int), CsvError> = when (cs) {
+    [] -> Error(CsvError(line, "a quoted field isn't closed"))
+    ['"', '"', *rest] -> quoted(rest, line, ['"'] + found)
+    ['"', *rest] -> Ok((text(found.reversed()), rest, found.filter { it == '\n' }.size))
+    [c, *rest] -> quoted(rest, line, [c] + found)
+  }
+
+  private quotedIfNeeded(value: String, separator: Char): String =
+    if (value.contains(separator.toString()) || value.contains("\"") || value.contains("\n") || value.contains("\r"))
+      "\"" + value.replace("\"", "\"\"") + "\""
+    else value
+
+  private text(cs: List<Char>): String = cs.map { it.toString() }.joinToString("")
+}
